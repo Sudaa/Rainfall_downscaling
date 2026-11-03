@@ -34,17 +34,28 @@ class Region(BaseModel):
 
 class Period(BaseModel):
     train_years: list[int]
+    val_years: list[int]
     test_years: list[int]
     months: list[int]
 
     @model_validator(mode="after")
     def _check_split(self) -> Self:
-        # A time-based split: testing on years the model never saw prevents leakage.
-        if max(self.train_years) >= min(self.test_years):
-            raise ValueError("all test years must come after all train years")
+        # A time-based split: models are tuned and scored only on years after
+        # all training years, so they never see that weather during training.
+        train_end, val_start, val_end = (
+            max(self.train_years),
+            min(self.val_years),
+            max(self.val_years),
+        )
+        if not train_end < val_start <= val_end < min(self.test_years):
+            raise ValueError("years must be ordered train < validation < test, with no overlap")
         if not all(1 <= m <= 12 for m in self.months):
             raise ValueError("months must be between 1 and 12")
         return self
+
+    @property
+    def all_years(self) -> list[int]:
+        return self.train_years + self.val_years + self.test_years
 
 
 class Era5(BaseModel):

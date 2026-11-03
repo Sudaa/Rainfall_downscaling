@@ -20,8 +20,10 @@ def cmd_config(cfg: Config) -> None:
 def cmd_download(cfg: Config) -> None:
     from .data import chirps, era5
 
-    for year in cfg.period.train_years + cfg.period.test_years:
+    years = cfg.period.all_years
+    for year in years:
         era5.download(cfg, year)
+    for year in years:
         chirps.download(cfg, year)
 
 
