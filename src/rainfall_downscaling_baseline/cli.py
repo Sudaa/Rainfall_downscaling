@@ -86,7 +86,12 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     if checkpoint.exists():
         from .models.unet import UNetDownscaler
 
-        predictions["unet"] = UNetDownscaler.load(checkpoint).predict(coarse)
+        unet = UNetDownscaler.load(checkpoint)
+        predictions["unet"] = unet.predict(coarse)
+        # Quantile mapping on top of the trained U-Net, fitted on its training-year output
+        unet_qm = QuantileMappingDownscaler(base=unet)
+        unet_qm.fit(train_coarse, train_fine)
+        predictions[unet_qm.name] = unet_qm.predict(coarse)
     else:
         print(f"no {checkpoint}: run `rainfall train` to include the U-Net")
 
@@ -97,6 +102,18 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     out = cfg.paths.figures / f"scores_{split}.csv"
     table.to_csv(out)
     print(f"saved {out}")
+
+    from .evaluation.plots import exceedance, map_panel, wettest_day
+
+    land = land_mask(obs)
+    day = wettest_day(obs)
+    for path in (
+        map_panel(
+            coarse["precip"], predictions, obs, land, day, cfg.paths.figures / f"maps_{split}.png"
+        ),
+        exceedance(predictions, obs, land, cfg.paths.figures / f"exceedance_{split}.png"),
+    ):
+        print(f"saved {path}")
 
 
 COMMANDS = {

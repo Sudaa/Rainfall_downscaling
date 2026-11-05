@@ -1,7 +1,7 @@
-"""Quantile mapping: bias correction on top of bilinear interpolation.
+"""Quantile mapping: bias correction on top of another model (bilinear by default).
 
-For each fine grid cell and calendar month, map the distribution of the
-interpolated training values onto the distribution of the observed (CHIRPS)
+For each fine grid cell and calendar month, map the distribution of the base
+model's training predictions onto the distribution of the observed (CHIRPS)
 training values. It fixes how often and how much it rains, not where.
 """
 
@@ -29,17 +29,20 @@ def map_quantiles(x: np.ndarray, model_q: np.ndarray, obs_q: np.ndarray) -> np.n
 
 
 class QuantileMappingDownscaler:
-    name = "quantile_mapping"
-
-    def __init__(self, n_quantiles: int = 100) -> None:
+    def __init__(self, n_quantiles: int = 100, base=None) -> None:
+        """`base`: an already trained model whose output is corrected (e.g. the U-Net).
+        Without one, a bilinear interpolator is fitted and corrected."""
         self.levels = np.linspace(0.0, 1.0, n_quantiles)
-        self.interpolator = BilinearDownscaler()
+        self.fit_base = base is None
+        self.base = BilinearDownscaler() if base is None else base
+        self.name = "quantile_mapping" if base is None else f"{base.name}+qm"
 
     def fit(self, coarse: xr.Dataset, fine: xr.DataArray) -> None:
-        """Store matching quantiles of interpolated and observed rain per land cell and month."""
-        self.interpolator.fit(coarse, fine)
-        interp = self.interpolator.predict(coarse)
-        # Sea cells have no CHIRPS values to map onto: they keep the bilinear values.
+        """Store quantiles of base predictions and of observed rain, per land cell and month."""
+        if self.fit_base:
+            self.base.fit(coarse, fine)
+        interp = self.base.predict(coarse)
+        # Sea cells have no CHIRPS values to map onto: they keep the base model's values.
         self.land = fine.notnull().all("time").values
         months = interp.time.dt.month.values
         self.model_q, self.obs_q = {}, {}
@@ -52,8 +55,8 @@ class QuantileMappingDownscaler:
             self.obs_q[month] = np.quantile(fine.values[days][:, self.land], self.levels, axis=0)
 
     def predict(self, coarse: xr.Dataset) -> xr.DataArray:
-        """Interpolate, then map each land cell's values through its own month's quantiles."""
-        interp = self.interpolator.predict(coarse)
+        """Predict with the base model, then map each land cell through its month's quantiles."""
+        interp = self.base.predict(coarse)
         out = interp.values.copy()
         months = interp.time.dt.month.values
         for month in np.unique(months):

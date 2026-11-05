@@ -61,3 +61,32 @@ def test_fit_and_predict_learn_a_doubling():
     land = fine.notnull()
     assert np.allclose(pred.where(land), fine, equal_nan=True)
     assert np.allclose(pred[:, 0, 0], bilinear[:, 0, 0])  # sea cell keeps bilinear
+
+
+class _Halving:
+    """A stand-in for a trained model: predicts half of bilinear."""
+
+    name = "half"
+
+    def __init__(self, coarse: xr.Dataset, fine: xr.DataArray) -> None:
+        self.lat, self.lon = fine.lat, fine.lon
+
+    def predict(self, coarse: xr.Dataset) -> xr.DataArray:
+        return coarse["precip"].interp(lat=self.lat, lon=self.lon) / 2
+
+
+def test_qm_corrects_a_trained_base_model_without_refitting_it():
+    rng = np.random.default_rng(1)
+    days = pd.date_range("2022-05-01", periods=31)
+    coarse = xr.Dataset(
+        {"precip": (("time", "lat", "lon"), rng.gamma(0.8, 10.0, (31, 2, 2)))},
+        coords={"time": days, "lat": [10.0, 10.25], "lon": [100.0, 100.25]},
+    )
+    fine_lat, fine_lon = np.arange(10.025, 10.25, 0.05), np.arange(100.025, 100.25, 0.05)
+    fine = coarse["precip"].interp(lat=fine_lat, lon=fine_lon)
+
+    model = QuantileMappingDownscaler(base=_Halving(coarse, fine))
+    model.fit(coarse, fine)
+
+    assert model.name == "half+qm"
+    assert np.allclose(model.predict(coarse), fine)  # the halving is undone
