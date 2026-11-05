@@ -62,12 +62,13 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     """
     from .evaluation.evaluate import evaluate
     from .models.bilinear import BilinearDownscaler
+    from .models.quantile_mapping import QuantileMappingDownscaler
     from .preprocessing.pairs import land_mask, load_split
 
     train_coarse, train_fine = load_split(cfg, "train")
     coarse, obs = load_split(cfg, split)
     predictions = {}
-    for model in [BilinearDownscaler()]:
+    for model in [BilinearDownscaler(), QuantileMappingDownscaler()]:
         model.fit(train_coarse["precip"], train_fine)
         predictions[model.name] = model.predict(coarse["precip"])
 
