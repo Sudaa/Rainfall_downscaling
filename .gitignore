@@ -9,9 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
-# Data and model outputs (large, reproducible from code)
-data/
-checkpoints/
+# Data and model outputs (large, reproducible from code). The leading / means
+# "only at the project root", so the src/.../data/ package is not ignored.
+/data/
+/checkpoints/
 *.nc
 
 # Secrets
