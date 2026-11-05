@@ -16,13 +16,21 @@ RAIN = LinearSegmentedColormap.from_list(
     "rain", ["#ffffff", "#cde2fb", "#86b6ef", "#3987e5", "#256abf", "#184f95", "#0d366b"]
 )
 RAIN.set_bad("#e8e7e3")  # sea: CHIRPS has no data there
-MODEL_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]  # fixed order, never cycled
+MODEL_COLOURS = [
+    "#2a78d6",
+    "#eb6834",
+    "#1baf7a",
+    "#eda100",
+    "#e87ba4",
+    "#008300",
+]  # fixed order, never cycled
 INK, MUTED = "#1a1a19", "#6b6a64"
 LABELS = {
     "bilinear": "Bilinear",
     "quantile_mapping": "Quantile mapping",
     "unet": "U-Net",
     "unet+qm": "U-Net + QM",
+    "unet+count": "U-Net + count loss",
 }
 FLOOR = 1e-5  # bottom of the log axis in exceedance()
 

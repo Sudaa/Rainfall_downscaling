@@ -50,18 +50,19 @@ def cmd_prepare(cfg: Config) -> None:
     print(f"saved to {cfg.paths.processed}")
 
 
-def cmd_train(cfg: Config) -> None:
+def cmd_train(cfg: Config, count_weight: float = 0.0) -> None:
     """Train the U-Net on the training years, stopping early on the validation year.
 
     The baselines train in seconds, so evaluate fits them itself; only the
-    U-Net is trained here and saved for evaluate to load.
+    U-Net is trained here and saved for evaluate to load. With count_weight > 0
+    it adds the heavy-rain count loss and is saved under its own name.
     """
     from .models.unet import UNetDownscaler
     from .preprocessing.pairs import load_split
 
-    model = UNetDownscaler(val=load_split(cfg, "val"))
+    model = UNetDownscaler(val=load_split(cfg, "val"), count_weight=count_weight)
     model.fit(*load_split(cfg, "train"))
-    out = cfg.paths.checkpoints / "unet.pt"
+    out = cfg.paths.checkpoints / f"{model.name.replace('+', '_')}.pt"
     model.save(out)
     print(f"saved {out}")
 
@@ -82,18 +83,19 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     for model in [BilinearDownscaler(), QuantileMappingDownscaler()]:
         model.fit(train_coarse, train_fine)
         predictions[model.name] = model.predict(coarse)
-    checkpoint = cfg.paths.checkpoints / "unet.pt"
-    if checkpoint.exists():
+    checkpoints = sorted(cfg.paths.checkpoints.glob("unet*.pt"))
+    if not checkpoints:
+        print(f"no U-Net in {cfg.paths.checkpoints}: run `rainfall train` to include it")
+    for checkpoint in checkpoints:
         from .models.unet import UNetDownscaler
 
         unet = UNetDownscaler.load(checkpoint)
-        predictions["unet"] = unet.predict(coarse)
-        # Quantile mapping on top of the trained U-Net, fitted on its training-year output
-        unet_qm = QuantileMappingDownscaler(base=unet)
-        unet_qm.fit(train_coarse, train_fine)
-        predictions[unet_qm.name] = unet_qm.predict(coarse)
-    else:
-        print(f"no {checkpoint}: run `rainfall train` to include the U-Net")
+        predictions[unet.name] = unet.predict(coarse)
+        if unet.name == "unet":
+            # Quantile mapping on top of the plain U-Net, fitted on its training-year output
+            unet_qm = QuantileMappingDownscaler(base=unet)
+            unet_qm.fit(train_coarse, train_fine)
+            predictions[unet_qm.name] = unet_qm.predict(coarse)
 
     table = evaluate(predictions, obs, land_mask(obs), cfg.eval_regions)
     print(f"Scores on {split} ({obs.sizes['time']} days, land only)")
@@ -134,9 +136,14 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--split", choices=["val", "test"], default="val", help="split to score (evaluate only)"
     )
+    parser.add_argument(
+        "--count-weight", type=float, default=0.0, help="lambda of the count loss (train only)"
+    )
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     if args.command == "evaluate":
         cmd_evaluate(cfg, args.split)
+    elif args.command == "train":
+        cmd_train(cfg, args.count_weight)
     else:
         COMMANDS[args.command](cfg)

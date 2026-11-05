@@ -6,7 +6,13 @@ import pytest
 import torch
 import xarray as xr
 
-from rainfall_downscaling_baseline.models.unet import UNet, UNetDownscaler, _masked_mse
+from rainfall_downscaling_baseline.models.unet import (
+    UNet,
+    UNetDownscaler,
+    _count_loss,
+    _masked_mse,
+    _soft_share,
+)
 
 
 def test_unet_output_matches_input_size_even_when_not_a_multiple_of_8():
@@ -51,3 +57,31 @@ def test_fit_predict_save_load_end_to_end(tmp_path):
     model.save(tmp_path / "unet.pt")
     loaded = UNetDownscaler.load(tmp_path / "unet.pt")
     assert np.allclose(loaded.predict(val[0]), pred, atol=1e-5)
+
+
+def test_soft_share_counts_pixels_above_threshold():
+    rain = torch.tensor([[[0.0, 5.0], [60.0, 100.0]]])  # 2 of 4 pixels are far above 20 mm
+    land = torch.ones(2, 2)
+    assert _soft_share(rain, land, 20.0, 2.0).item() == pytest.approx(0.5, abs=1e-3)
+
+
+def test_count_loss_is_zero_for_identical_fields_and_positive_for_too_dry():
+    true = torch.full((2, 16, 16), 40.0)
+    land = torch.ones(16, 16)
+    assert _count_loss(true, true, land, (20.0,)).item() == pytest.approx(0.0)
+    dry = torch.full((2, 16, 16), 5.0, requires_grad=True)
+    loss = _count_loss(dry, true, land, (20.0,))
+    loss.backward()
+    assert loss.item() > 0.9
+    assert dry.grad.abs().sum() > 0  # the soft threshold gives a gradient to learn from
+
+
+def test_count_loss_model_trains_saves_and_loads(tmp_path):
+    train, val = _toy_pair(16, seed=1), _toy_pair(8, seed=2)
+    model = UNetDownscaler(val=val, epochs=1, batch_size=4, patch_size=16, base=4, count_weight=5.0)
+    model.fit(*train)
+    assert model.name == "unet+count"
+    assert "val_count" in model.history[0]
+    model.save(tmp_path / "m.pt")
+    loaded = UNetDownscaler.load(tmp_path / "m.pt")
+    assert loaded.name == "unet+count" and loaded.count_weight == 5.0

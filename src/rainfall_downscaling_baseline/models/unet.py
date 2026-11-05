@@ -79,9 +79,49 @@ def _masked_mse(pred: torch.Tensor, target: torch.Tensor, land: torch.Tensor) ->
     return ((pred - target) ** 2 * land).sum() / land.sum().clamp(min=1)
 
 
-class UNetDownscaler:
-    name = "unet"
+def _soft_share(rain: torch.Tensor, land: torch.Tensor, threshold: float, width: float):
+    """Share of land pixels above `threshold` mm, per field, with a smooth threshold.
 
+    A hard `rain > threshold` has no gradient, so the network could not learn
+    from it. The sigmoid ramps from 0 to 1 around the threshold instead
+    (`width` mm sets how fast): 18 mm counts about 0.27 at 20 mm, 25 mm about 0.92.
+    """
+    wet = torch.sigmoid((rain - threshold) / width)
+    return (wet * land).sum((-2, -1)) / land.sum((-2, -1)).clamp(min=1)
+
+
+def _count_loss(
+    pred_rain: torch.Tensor,
+    true_rain: torch.Tensor,
+    land: torch.Tensor,
+    thresholds: tuple[float, ...],
+    width: float = 2.0,
+    levels: tuple[int, ...] = (1, 2, 4),
+) -> torch.Tensor:
+    """How far apart the shares of heavy-rain pixels are, in centred crops of several sizes.
+
+    Crops are the whole field, its centre half and its centre quarter (like the
+    multi-level crops of Clip4Rain's MRA loss, but with no CLIP): the share is
+    judged per region, not per pixel, so rain slightly out of place is not
+    punished twice, while rain that is too light everywhere is.
+    """
+    height, width_px = pred_rain.shape[-2:]
+    gaps = []
+    for level in levels:
+        h, w = height // level, width_px // level
+        top, left = (height - h) // 2, (width_px - w) // 2
+        crop = (..., slice(top, top + h), slice(left, left + w))
+        for t in thresholds:
+            pred_share = _soft_share(pred_rain[crop], land[crop], t, width)
+            true_share = _soft_share(true_rain[crop], land[crop], t, width)
+            gaps.append((pred_share - true_share).abs().mean())
+    return torch.stack(gaps).mean()
+
+
+LOG_MAX = float(np.log1p(1000.0))  # cap on log(1 + rain) before exp, so it cannot overflow
+
+
+class UNetDownscaler:
     def __init__(
         self,
         val: tuple[xr.Dataset, xr.DataArray] | None = None,
@@ -92,11 +132,16 @@ class UNetDownscaler:
         learning_rate: float = 1e-3,
         base: int = 32,
         seed: int = 0,
+        count_weight: float = 0.0,
+        thresholds: tuple[float, ...] = (20.0, 50.0),
     ) -> None:
+        """`count_weight` (lambda) > 0 adds the heavy-rain count loss: MSE + lambda * count."""
         self.val = val  # (coarse, fine) of the validation split, for early stopping
         self.epochs, self.patience = epochs, patience
         self.batch_size, self.patch_size = batch_size, patch_size
         self.learning_rate, self.base, self.seed = learning_rate, base, seed
+        self.count_weight, self.thresholds = count_weight, thresholds
+        self.name = "unet" if count_weight == 0 else "unet+count"
         self.interpolator = BilinearDownscaler()
 
     # --- data ---
@@ -116,6 +161,22 @@ class UNetDownscaler:
         bilinear = self.interpolator.predict(coarse).clip(min=0)
         residual = to_log(fine) - to_log(bilinear)
         return residual.fillna(0).values.astype(np.float32)
+
+    def _loss(self, inputs, residual, target, land) -> tuple[torch.Tensor, float, float]:
+        """Total loss, and its MSE and count parts for printing.
+
+        The count part needs rain in mm: bilinear log rain is channel 0 of the
+        inputs (undo its normalisation), plus the predicted or true residual.
+        """
+        mse = _masked_mse(residual, target, land)
+        if self.count_weight == 0:
+            return mse, mse.item(), 0.0
+        norm = self.norms["precip"]
+        log_bilinear = inputs[:, 0] * norm.std + norm.mean
+        pred_rain = torch.expm1((log_bilinear + residual).clamp(max=LOG_MAX)).clamp(min=0)
+        true_rain = torch.expm1((log_bilinear + target).clamp(max=LOG_MAX)).clamp(min=0)
+        count = _count_loss(pred_rain, true_rain, land, self.thresholds)
+        return mse + self.count_weight * count, mse.item(), count.item()
 
     def _predict_residual(self, inputs: np.ndarray) -> np.ndarray:
         """Run the network on whole fields, a few days at a time."""
@@ -162,21 +223,33 @@ class UNetDownscaler:
             losses = []
             for x, y, mask in loader:
                 optimiser.zero_grad()
-                loss = _masked_mse(self.net(x), y, mask)
+                loss, _, _ = self._loss(x, self.net(x), y, mask)
                 loss.backward()
                 optimiser.step()
                 losses.append(loss.item())
             train_loss = float(np.mean(losses))
+            # Early stopping uses the same total loss on whole validation fields
             if self.val is not None:
                 pred = torch.from_numpy(self._predict_residual(val_inputs))
-                val_loss = _masked_mse(pred, val_target, land.expand_as(pred)).item()
+                total, mse, count = self._loss(
+                    torch.from_numpy(val_inputs), pred, val_target, land.expand_as(pred)
+                )
+                val_loss = total.item()
             else:
-                val_loss = train_loss
-            self.history.append({"epoch": epoch, "train": train_loss, "val": val_loss})
-            seconds = time.time() - start
-            print(
-                f"epoch {epoch:2d}  train {train_loss:.4f}  val {val_loss:.4f}  ({seconds:.0f} s)"
+                val_loss, mse, count = train_loss, float("nan"), float("nan")
+            self.history.append(
+                {
+                    "epoch": epoch,
+                    "train": train_loss,
+                    "val": val_loss,
+                    "val_mse": mse,
+                    "val_count": count,
+                }
             )
+            seconds = time.time() - start
+            parts = f" (mse {mse:.4f}, count {count:.4f})" if self.count_weight else ""
+            losses_text = f"train {train_loss:.4f}  val {val_loss:.4f}{parts}"
+            print(f"epoch {epoch:2d}  {losses_text}  ({seconds:.0f} s)")
 
             # Early stopping: keep the best weights, stop when validation stops improving
             if val_loss < best_loss:
@@ -202,6 +275,8 @@ class UNetDownscaler:
             {
                 "weights": self.net.state_dict(),
                 "base": self.base,
+                "count_weight": self.count_weight,
+                "thresholds": self.thresholds,
                 "norms": {var: (n.mean, n.std) for var, n in self.norms.items()},
                 "lat": torch.tensor(self.interpolator.lat.values),
                 "lon": torch.tensor(self.interpolator.lon.values),
@@ -214,7 +289,11 @@ class UNetDownscaler:
     @classmethod
     def load(cls, path: Path) -> "UNetDownscaler":
         saved = torch.load(path)
-        model = cls(base=saved["base"])
+        model = cls(
+            base=saved["base"],
+            count_weight=saved.get("count_weight", 0.0),
+            thresholds=saved.get("thresholds", (20.0, 50.0)),
+        )
         model.norms = {var: Normalizer(*stats) for var, stats in saved["norms"].items()}
         lat, lon = saved["lat"].numpy(), saved["lon"].numpy()
         model.interpolator.lat = xr.DataArray(lat, coords={"lat": lat})
