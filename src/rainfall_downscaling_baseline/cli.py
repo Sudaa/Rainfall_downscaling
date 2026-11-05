@@ -17,14 +17,22 @@ def cmd_config(cfg: Config) -> None:
     print(f"scale factor: {cfg.scale_factor}")
 
 
-def cmd_download(cfg: Config) -> None:
-    from .data import chirps, era5
+def cmd_download_era5(cfg: Config) -> None:
+    from .data import era5
 
-    years = cfg.period.all_years
-    for year in years:
-        era5.download(cfg, year)
-    for year in years:
+    era5.download(cfg, cfg.period.all_years)
+
+
+def cmd_download_chirps(cfg: Config) -> None:
+    from .data import chirps
+
+    for year in cfg.period.all_years:
         chirps.download(cfg, year)
+
+
+def cmd_download(cfg: Config) -> None:
+    cmd_download_era5(cfg)
+    cmd_download_chirps(cfg)
 
 
 def cmd_prepare(cfg: Config) -> None:
@@ -47,6 +55,8 @@ def cmd_evaluate(cfg: Config) -> None:
 COMMANDS = {
     "config": cmd_config,
     "download": cmd_download,
+    "download-era5": cmd_download_era5,
+    "download-chirps": cmd_download_chirps,
     "prepare": cmd_prepare,
     "train": cmd_train,
     "evaluate": cmd_evaluate,
