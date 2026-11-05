@@ -79,6 +79,7 @@ class Paths(BaseModel):
 
 class Config(BaseModel):
     region: Region
+    eval_regions: dict[str, Region] = {}
     period: Period
     era5: Era5
     chirps: Chirps

@@ -55,10 +55,29 @@ def cmd_train(cfg: Config) -> None:
     raise NotImplementedError
 
 
-def cmd_evaluate(cfg: Config) -> None:
-    # TODO: predict the test split with every model, score with evaluation.evaluate,
-    # print the table and save figures to cfg.paths.figures
-    raise NotImplementedError
+def cmd_evaluate(cfg: Config, split: str = "val") -> None:
+    """Fit every model on train, predict `split`, score over land, save the table.
+
+    Use the validation split while developing; score the test split once, at the end.
+    """
+    from .evaluation.evaluate import evaluate
+    from .models.bilinear import BilinearDownscaler
+    from .preprocessing.pairs import land_mask, load_split
+
+    train_coarse, train_fine = load_split(cfg, "train")
+    coarse, obs = load_split(cfg, split)
+    predictions = {}
+    for model in [BilinearDownscaler()]:
+        model.fit(train_coarse["precip"], train_fine)
+        predictions[model.name] = model.predict(coarse["precip"])
+
+    table = evaluate(predictions, obs, land_mask(obs), cfg.eval_regions)
+    print(f"Scores on {split} ({obs.sizes['time']} days, land only)")
+    print(table.round(3).to_string())
+    cfg.paths.figures.mkdir(parents=True, exist_ok=True)
+    out = cfg.paths.figures / f"scores_{split}.csv"
+    table.to_csv(out)
+    print(f"saved {out}")
 
 
 COMMANDS = {
@@ -76,5 +95,12 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="rainfall", description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="path to a TOML config")
+    parser.add_argument(
+        "--split", choices=["val", "test"], default="val", help="split to score (evaluate only)"
+    )
     args = parser.parse_args(argv)
-    COMMANDS[args.command](load_config(args.config))
+    cfg = load_config(args.config)
+    if args.command == "evaluate":
+        cmd_evaluate(cfg, args.split)
+    else:
+        COMMANDS[args.command](cfg)

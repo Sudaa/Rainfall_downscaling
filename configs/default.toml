@@ -8,6 +8,14 @@ lat_max = 21.0
 lon_min = 97.0
 lon_max = 106.0
 
+# Smaller areas scored separately at evaluation (models still train on the whole region).
+[eval_regions.bangkok]
+name = "bangkok"
+lat_min = 13.5
+lat_max = 14.0
+lon_min = 100.3
+lon_max = 100.9
+
 [period]
 train_years = [2022, 2023]
 val_years = [2024]
