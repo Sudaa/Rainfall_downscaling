@@ -23,6 +23,8 @@ MODEL_COLOURS = [
     "#eda100",
     "#e87ba4",
     "#008300",
+    "#6250d6",
+    "#e34948",
 ]  # fixed order, never cycled
 INK, MUTED = "#1a1a19", "#6b6a64"
 LABELS = {
@@ -31,6 +33,8 @@ LABELS = {
     "unet": "U-Net",
     "unet+qm": "U-Net + QM",
     "unet+count": "U-Net + count loss",
+    "unet+clip": "U-Net + CLIP (text)",
+    "unet+clip-image": "U-Net + CLIP (image)",
 }
 FLOOR = 1e-5  # bottom of the log axis in exceedance()
 
