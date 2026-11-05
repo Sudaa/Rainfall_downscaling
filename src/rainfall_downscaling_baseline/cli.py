@@ -51,8 +51,19 @@ def cmd_prepare(cfg: Config) -> None:
 
 
 def cmd_train(cfg: Config) -> None:
-    # TODO: fit each model in models/ on the training split, save to cfg.paths.checkpoints
-    raise NotImplementedError
+    """Train the U-Net on the training years, stopping early on the validation year.
+
+    The baselines train in seconds, so evaluate fits them itself; only the
+    U-Net is trained here and saved for evaluate to load.
+    """
+    from .models.unet import UNetDownscaler
+    from .preprocessing.pairs import load_split
+
+    model = UNetDownscaler(val=load_split(cfg, "val"))
+    model.fit(*load_split(cfg, "train"))
+    out = cfg.paths.checkpoints / "unet.pt"
+    model.save(out)
+    print(f"saved {out}")
 
 
 def cmd_evaluate(cfg: Config, split: str = "val") -> None:
@@ -69,8 +80,15 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     coarse, obs = load_split(cfg, split)
     predictions = {}
     for model in [BilinearDownscaler(), QuantileMappingDownscaler()]:
-        model.fit(train_coarse["precip"], train_fine)
-        predictions[model.name] = model.predict(coarse["precip"])
+        model.fit(train_coarse, train_fine)
+        predictions[model.name] = model.predict(coarse)
+    checkpoint = cfg.paths.checkpoints / "unet.pt"
+    if checkpoint.exists():
+        from .models.unet import UNetDownscaler
+
+        predictions["unet"] = UNetDownscaler.load(checkpoint).predict(coarse)
+    else:
+        print(f"no {checkpoint}: run `rainfall train` to include the U-Net")
 
     table = evaluate(predictions, obs, land_mask(obs), cfg.eval_regions)
     print(f"Scores on {split} ({obs.sizes['time']} days, land only)")

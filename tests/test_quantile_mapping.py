@@ -55,8 +55,8 @@ def test_fit_and_predict_learn_a_doubling():
     fine[:, 0, 0] = np.nan  # a sea cell
 
     model = QuantileMappingDownscaler()
-    model.fit(coarse, fine)
-    pred = model.predict(coarse)
+    model.fit(coarse.to_dataset(name="precip"), fine)
+    pred = model.predict(coarse.to_dataset(name="precip"))
 
     land = fine.notnull()
     assert np.allclose(pred.where(land), fine, equal_nan=True)

@@ -1,12 +1,41 @@
-"""PyTorch Dataset of paired (coarse, fine) patches for training the U-Net.
+"""PyTorch Dataset of random patches cut from daily fields, for training the U-Net."""
 
-Needs PyTorch: add the CPU build with uv when you reach the U-Net step.
-"""
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
-# TODO (U-Net step):
-# - class PairedPatches(torch.utils.data.Dataset)
-#     __init__(coarse, fine, patch_size, factor): store arrays already transformed
-#     __len__: number of days
-#     __getitem__(i): pick a random crop location on the coarse grid, cut the
-#         matching patch_size*factor crop from the fine grid, return tensors
-# - def make_loader(dataset, batch_size, shuffle) -> torch.utils.data.DataLoader
+
+class PairedPatches(Dataset):
+    """One random square patch per day: (inputs, target, land mask), all on the fine grid.
+
+    A new location is drawn every time a day is requested, so each epoch sees
+    different parts of the region. That is cheap augmentation, and small
+    patches train much faster on a CPU than whole fields.
+    """
+
+    def __init__(
+        self,
+        inputs: np.ndarray,  # (days, channels, lat, lon), already normalised
+        target: np.ndarray,  # (days, lat, lon), 0 over the sea
+        land: np.ndarray,  # (lat, lon), True on land
+        patch_size: int = 128,
+        seed: int = 0,
+    ) -> None:
+        self.inputs, self.target, self.patch_size = inputs, target, patch_size
+        self.land = land.astype(np.float32)
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self) -> int:
+        return len(self.inputs)
+
+    def __getitem__(self, day: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        size = self.patch_size
+        height, width = self.land.shape
+        y = self.rng.integers(0, height - size + 1)
+        x = self.rng.integers(0, width - size + 1)
+        window = (slice(y, y + size), slice(x, x + size))
+        return (
+            torch.from_numpy(self.inputs[day][:, window[0], window[1]]),
+            torch.from_numpy(self.target[day][window]),
+            torch.from_numpy(self.land[window]),
+        )

@@ -85,7 +85,7 @@ def test_bilinear_reproduces_a_linear_field_exactly():
         coords={"time": coarse.time, "lat": fine_lat, "lon": fine_lon},
     )
     model = BilinearDownscaler()
-    model.fit(coarse, fine)
-    pred = model.predict(coarse)
+    model.fit(coarse.to_dataset(name="precip"), fine)
+    pred = model.predict(coarse.to_dataset(name="precip"))
     assert pred.shape == fine.shape
     assert np.allclose(pred.isel(time=0), fine_lat[:, None] + fine_lon[None, :])

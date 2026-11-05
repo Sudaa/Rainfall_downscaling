@@ -13,10 +13,12 @@ import xarray as xr
 class Downscaler(Protocol):
     name: str
 
-    def fit(self, coarse: xr.DataArray, fine: xr.DataArray) -> None:
-        """Learn from training pairs (both mm/day). Also remember the fine grid."""
+    def fit(self, coarse: xr.Dataset, fine: xr.DataArray) -> None:
+        """Learn from training pairs: daily ERA5 (all variables, rain in mm/day) and
+        CHIRPS rain (mm/day). Each model uses the variables it needs. Also remember
+        the fine grid."""
         ...
 
-    def predict(self, coarse: xr.DataArray) -> xr.DataArray:
+    def predict(self, coarse: xr.Dataset) -> xr.DataArray:
         """Return rainfall in mm/day on the fine grid seen in fit."""
         ...

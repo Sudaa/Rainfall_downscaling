@@ -35,7 +35,7 @@ class QuantileMappingDownscaler:
         self.levels = np.linspace(0.0, 1.0, n_quantiles)
         self.interpolator = BilinearDownscaler()
 
-    def fit(self, coarse: xr.DataArray, fine: xr.DataArray) -> None:
+    def fit(self, coarse: xr.Dataset, fine: xr.DataArray) -> None:
         """Store matching quantiles of interpolated and observed rain per land cell and month."""
         self.interpolator.fit(coarse, fine)
         interp = self.interpolator.predict(coarse)
@@ -51,7 +51,7 @@ class QuantileMappingDownscaler:
             )
             self.obs_q[month] = np.quantile(fine.values[days][:, self.land], self.levels, axis=0)
 
-    def predict(self, coarse: xr.DataArray) -> xr.DataArray:
+    def predict(self, coarse: xr.Dataset) -> xr.DataArray:
         """Interpolate, then map each land cell's values through its own month's quantiles."""
         interp = self.interpolator.predict(coarse)
         out = interp.values.copy()
