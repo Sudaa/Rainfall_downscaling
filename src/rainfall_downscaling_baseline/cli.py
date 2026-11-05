@@ -36,9 +36,18 @@ def cmd_download(cfg: Config) -> None:
 
 
 def cmd_prepare(cfg: Config) -> None:
-    # TODO: load both datasets, convert ERA5 to daily, crop, check alignment,
-    # split by year, fit transforms on train, save arrays to cfg.paths.processed
-    raise NotImplementedError
+    # Transforms (log, normalisation) are fitted later by the models that need
+    # them, on the training split only; prepare saves plain mm/day.
+    from .preprocessing.pairs import build_pairs, save_split
+    from .preprocessing.splits import split_by_year
+
+    coarse, fine = build_pairs(cfg, cfg.period.all_years)
+    coarse_splits = split_by_year(coarse, cfg.period)
+    fine_splits = split_by_year(fine, cfg.period)
+    for split in coarse_splits:
+        save_split(cfg, split, coarse_splits[split], fine_splits[split])
+        print(f"{split}: {coarse_splits[split].sizes['time']} days")
+    print(f"saved to {cfg.paths.processed}")
 
 
 def cmd_train(cfg: Config) -> None:
