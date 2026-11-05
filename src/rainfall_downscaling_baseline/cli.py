@@ -50,17 +50,17 @@ def cmd_prepare(cfg: Config) -> None:
     print(f"saved to {cfg.paths.processed}")
 
 
-def cmd_train(cfg: Config, count_weight: float = 0.0) -> None:
+def cmd_train(cfg: Config, aux: str = "none", aux_weight: float = 0.0) -> None:
     """Train the U-Net on the training years, stopping early on the validation year.
 
     The baselines train in seconds, so evaluate fits them itself; only the
-    U-Net is trained here and saved for evaluate to load. With count_weight > 0
-    it adds the heavy-rain count loss and is saved under its own name.
+    U-Net is trained here and saved for evaluate to load. With `aux` it adds a
+    second loss term (count, clip or clip-image) and is saved under its own name.
     """
     from .models.unet import UNetDownscaler
     from .preprocessing.pairs import load_split
 
-    model = UNetDownscaler(val=load_split(cfg, "val"), count_weight=count_weight)
+    model = UNetDownscaler(val=load_split(cfg, "val"), aux=aux, aux_weight=aux_weight)
     model.fit(*load_split(cfg, "train"))
     out = cfg.paths.checkpoints / f"{model.name.replace('+', '_')}.pt"
     model.save(out)
@@ -137,13 +137,19 @@ def main(argv: list[str] | None = None) -> None:
         "--split", choices=["val", "test"], default="val", help="split to score (evaluate only)"
     )
     parser.add_argument(
-        "--count-weight", type=float, default=0.0, help="lambda of the count loss (train only)"
+        "--aux",
+        choices=["none", "count", "clip", "clip-image"],
+        default="none",
+        help="extra loss term for the U-Net (train only)",
+    )
+    parser.add_argument(
+        "--aux-weight", type=float, default=0.0, help="lambda of the extra loss (train only)"
     )
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     if args.command == "evaluate":
         cmd_evaluate(cfg, args.split)
     elif args.command == "train":
-        cmd_train(cfg, args.count_weight)
+        cmd_train(cfg, args.aux, args.aux_weight)
     else:
         COMMANDS[args.command](cfg)

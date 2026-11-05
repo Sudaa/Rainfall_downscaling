@@ -78,10 +78,12 @@ def test_count_loss_is_zero_for_identical_fields_and_positive_for_too_dry():
 
 def test_count_loss_model_trains_saves_and_loads(tmp_path):
     train, val = _toy_pair(16, seed=1), _toy_pair(8, seed=2)
-    model = UNetDownscaler(val=val, epochs=1, batch_size=4, patch_size=16, base=4, count_weight=5.0)
+    model = UNetDownscaler(
+        val=val, epochs=1, batch_size=4, patch_size=16, base=4, aux="count", aux_weight=5.0
+    )
     model.fit(*train)
     assert model.name == "unet+count"
-    assert "val_count" in model.history[0]
+    assert "val_aux" in model.history[0]
     model.save(tmp_path / "m.pt")
     loaded = UNetDownscaler.load(tmp_path / "m.pt")
-    assert loaded.name == "unet+count" and loaded.count_weight == 5.0
+    assert loaded.name == "unet+count" and loaded.aux_weight == 5.0

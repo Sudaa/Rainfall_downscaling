@@ -121,6 +121,9 @@ def _count_loss(
 LOG_MAX = float(np.log1p(1000.0))  # cap on log(1 + rain) before exp, so it cannot overflow
 
 
+AUX_LOSSES = ("none", "count", "clip", "clip-image")
+
+
 class UNetDownscaler:
     def __init__(
         self,
@@ -132,16 +135,24 @@ class UNetDownscaler:
         learning_rate: float = 1e-3,
         base: int = 32,
         seed: int = 0,
-        count_weight: float = 0.0,
+        aux: str = "none",
+        aux_weight: float = 0.0,
         thresholds: tuple[float, ...] = (20.0, 50.0),
     ) -> None:
-        """`count_weight` (lambda) > 0 adds the heavy-rain count loss: MSE + lambda * count."""
+        """`aux` adds a second loss term judged per region, weighted by `aux_weight` (lambda):
+
+        - "count": share of pixels above `thresholds` in crops (no CLIP)
+        - "clip": CLIP alignment of crops with a text prompt (Clip4Rain's MRA)
+        - "clip-image": CLIP image features only, no text (the ablation)
+        """
+        if aux not in AUX_LOSSES:
+            raise ValueError(f"aux must be one of {AUX_LOSSES}, got {aux!r}")
         self.val = val  # (coarse, fine) of the validation split, for early stopping
         self.epochs, self.patience = epochs, patience
         self.batch_size, self.patch_size = batch_size, patch_size
         self.learning_rate, self.base, self.seed = learning_rate, base, seed
-        self.count_weight, self.thresholds = count_weight, thresholds
-        self.name = "unet" if count_weight == 0 else "unet+count"
+        self.aux, self.aux_weight, self.thresholds = aux, aux_weight, thresholds
+        self.name = "unet" if aux == "none" else f"unet+{aux}"
         self.interpolator = BilinearDownscaler()
 
     # --- data ---
@@ -163,20 +174,23 @@ class UNetDownscaler:
         return residual.fillna(0).values.astype(np.float32)
 
     def _loss(self, inputs, residual, target, land) -> tuple[torch.Tensor, float, float]:
-        """Total loss, and its MSE and count parts for printing.
+        """Total loss, and its MSE and auxiliary parts for printing.
 
-        The count part needs rain in mm: bilinear log rain is channel 0 of the
-        inputs (undo its normalisation), plus the predicted or true residual.
+        The auxiliary part needs rain in mm: bilinear log rain is channel 0 of
+        the inputs (undo its normalisation), plus the predicted or true residual.
         """
         mse = _masked_mse(residual, target, land)
-        if self.count_weight == 0:
+        if self.aux == "none":
             return mse, mse.item(), 0.0
         norm = self.norms["precip"]
         log_bilinear = inputs[:, 0] * norm.std + norm.mean
         pred_rain = torch.expm1((log_bilinear + residual).clamp(max=LOG_MAX)).clamp(min=0)
         true_rain = torch.expm1((log_bilinear + target).clamp(max=LOG_MAX)).clamp(min=0)
-        count = _count_loss(pred_rain, true_rain, land, self.thresholds)
-        return mse + self.count_weight * count, mse.item(), count.item()
+        if self.aux == "count":
+            extra = _count_loss(pred_rain, true_rain, land, self.thresholds)
+        else:
+            extra = self.clip_loss(pred_rain, true_rain, land)
+        return mse + self.aux_weight * extra, mse.item(), extra.item()
 
     def _predict_residual(self, inputs: np.ndarray) -> np.ndarray:
         """Run the network on whole fields, a few days at a time."""
@@ -200,6 +214,10 @@ class UNetDownscaler:
             for var in INPUTS
         }
         self.land = fine.notnull().all("time").values
+        if self.aux.startswith("clip"):
+            from .clip_loss import ClipAlignmentLoss  # loads CLIP only when it is needed
+
+            self.clip_loss = ClipAlignmentLoss(mode="image" if self.aux == "clip-image" else "text")
         patches = PairedPatches(
             self._inputs(coarse),
             self._residual(coarse, fine),
@@ -230,24 +248,20 @@ class UNetDownscaler:
             train_loss = float(np.mean(losses))
             # Early stopping uses the same total loss on whole validation fields
             if self.val is not None:
-                pred = torch.from_numpy(self._predict_residual(val_inputs))
-                total, mse, count = self._loss(
-                    torch.from_numpy(val_inputs), pred, val_target, land.expand_as(pred)
-                )
-                val_loss = total.item()
+                val_loss, mse, extra = self._validation_loss(val_inputs, val_target, land)
             else:
-                val_loss, mse, count = train_loss, float("nan"), float("nan")
+                val_loss, mse, extra = train_loss, float("nan"), float("nan")
             self.history.append(
                 {
                     "epoch": epoch,
                     "train": train_loss,
                     "val": val_loss,
                     "val_mse": mse,
-                    "val_count": count,
+                    "val_aux": extra,
                 }
             )
             seconds = time.time() - start
-            parts = f" (mse {mse:.4f}, count {count:.4f})" if self.count_weight else ""
+            parts = f" (mse {mse:.4f}, {self.aux} {extra:.4f})" if self.aux != "none" else ""
             losses_text = f"train {train_loss:.4f}  val {val_loss:.4f}{parts}"
             print(f"epoch {epoch:2d}  {losses_text}  ({seconds:.0f} s)")
 
@@ -262,6 +276,24 @@ class UNetDownscaler:
                     break
         self.net.load_state_dict(best_weights)
 
+    def _validation_loss(self, inputs: np.ndarray, target: torch.Tensor, land: torch.Tensor):
+        """Mean loss over the validation days, a few days at a time (CLIP is memory hungry)."""
+        residual = torch.from_numpy(self._predict_residual(inputs))
+        totals, mses, extras = [], [], []
+        with torch.no_grad():
+            for i in range(0, len(inputs), self.batch_size):
+                part = slice(i, i + self.batch_size)
+                total, mse, extra = self._loss(
+                    torch.from_numpy(inputs[part]),
+                    residual[part],
+                    target[part],
+                    land.expand_as(residual[part]),
+                )
+                totals.append(total.item())
+                mses.append(mse)
+                extras.append(extra)
+        return float(np.mean(totals)), float(np.mean(mses)), float(np.mean(extras))
+
     def predict(self, coarse: xr.Dataset) -> xr.DataArray:
         bilinear = self.interpolator.predict(coarse).clip(min=0)
         residual = self._predict_residual(self._inputs(coarse))
@@ -275,7 +307,8 @@ class UNetDownscaler:
             {
                 "weights": self.net.state_dict(),
                 "base": self.base,
-                "count_weight": self.count_weight,
+                "aux": self.aux,
+                "aux_weight": self.aux_weight,
                 "thresholds": self.thresholds,
                 "norms": {var: (n.mean, n.std) for var, n in self.norms.items()},
                 "lat": torch.tensor(self.interpolator.lat.values),
@@ -289,9 +322,15 @@ class UNetDownscaler:
     @classmethod
     def load(cls, path: Path) -> "UNetDownscaler":
         saved = torch.load(path)
+        if "aux" in saved:
+            aux, aux_weight = saved["aux"], saved["aux_weight"]
+        else:  # saved before `aux` existed: only the count loss was possible
+            aux_weight = saved.get("count_weight", 0.0)
+            aux = "count" if aux_weight else "none"
         model = cls(
             base=saved["base"],
-            count_weight=saved.get("count_weight", 0.0),
+            aux=aux,
+            aux_weight=aux_weight,
             thresholds=saved.get("thresholds", (20.0, 50.0)),
         )
         model.norms = {var: Normalizer(*stats) for var, stats in saved["norms"].items()}
