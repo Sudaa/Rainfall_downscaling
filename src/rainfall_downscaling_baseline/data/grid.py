@@ -3,6 +3,7 @@
 Both functions expect dimensions named `lat` and `lon` (the loaders rename them).
 """
 
+import numpy as np
 import xarray as xr
 
 from ..config import Region
@@ -27,12 +28,34 @@ def crop(ds: xr.Dataset, region: Region) -> xr.Dataset:
     return cropped
 
 
-def check_alignment(coarse: xr.Dataset, fine: xr.Dataset, factor: int) -> None:
-    """Raise ValueError unless each coarse cell is covered by exactly factor x factor fine cells.
+def check_alignment(coarse: xr.Dataset, fine: xr.Dataset, factor: int, tol: float = 1e-4) -> None:
+    """Raise ValueError unless the fine grid can be interpolated from the coarse one.
 
-    TODO:
-    - Are the coordinates cell centres or cell edges in each dataset?
-      Print the first few latitudes of both and work out where each cell's
-      edges are. This decides whether the 5 to 1 ratio really holds.
+    Both datasets give cell centres, but the grids are offset: ERA5 cells are
+    centred on multiples of 0.25 deg, so their edges (e.g. 13.875) cut CHIRPS
+    cells (edges on multiples of 0.05) in half. Coarse cells are therefore not
+    exact blocks of factor x factor fine cells. The models do not need that:
+    they interpolate the coarse field to the fine centres and work on the fine
+    grid. What they need, and what this checks, is that
+
+    - both grids are regular (no gaps),
+    - the coarse spacing is `factor` times the fine spacing,
+    - every fine centre lies inside the coarse points, so interpolation never
+      extrapolates.
+
+    `tol` (degrees) absorbs rounding: CHIRPS stores coordinates as float32.
     """
-    raise NotImplementedError
+    for dim in ("lat", "lon"):
+        c = np.sort(coarse[dim].values.astype(float))
+        f = np.sort(fine[dim].values.astype(float))
+        c_step, f_step = np.diff(c), np.diff(f)
+        if np.ptp(c_step) > tol or np.ptp(f_step) > tol:
+            raise ValueError(f"{dim}: grid spacing is not regular")
+        if abs(c_step[0] - factor * f_step[0]) > tol:
+            raise ValueError(
+                f"{dim}: coarse step {c_step[0]:g} is not {factor} x fine step {f_step[0]:g}"
+            )
+        if f[0] < c[0] - tol or f[-1] > c[-1] + tol:
+            raise ValueError(
+                f"{dim}: fine grid {f[0]:g}..{f[-1]:g} is outside coarse grid {c[0]:g}..{c[-1]:g}"
+            )

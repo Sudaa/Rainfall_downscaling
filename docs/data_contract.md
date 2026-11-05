@@ -11,7 +11,7 @@ Tests in `tests/test_grid.py` check these values.
 | Units on disk | tp: m per hour (accumulated); tcwv: kg m-2; u, v: m s-1 | mm/day |
 | Units after loading | precip: mm/day (after `to_daily`); tcwv: kg m-2; u, v: m s-1 | mm/day |
 | Grid spacing | 0.25 deg | 0.05 deg |
-| Coordinates are cell centres or edges? | ? | ? |
+| Coordinates are cell centres or edges? | centres, on multiples of 0.25 (cell edges at x.125, x.375, ...) | centres at x.025, x.075, ... (cell edges on multiples of 0.05) |
 | Latitude order | north to south (21.0 to 5.0) | south to north (5.025 to 20.975) |
 | Longitude range (0..360 or -180..180) | -180..180 | -180..180 |
 | Time step on disk | hourly | daily |
@@ -29,3 +29,9 @@ Region: 5N to 21N, 97E to 106E. Period: see `configs/default.toml`.
   which is not downloaded. A 23-hour day would underestimate rain, so `to_daily` keeps only
   complete days: 183 days per season instead of 184. CHIRPS days are matched to the ERA5 days.
 - **ERA5 `tp` is renamed `precip`** after conversion, so both datasets use the same name and unit.
+- **The grids are not nested blocks.** ERA5 cell edges (e.g. 13.875) cut CHIRPS cells in half,
+  so one ERA5 cell covers 4 whole CHIRPS cells and 2 halves per direction, not 5 x 5 (also:
+  65 x 5 = 325, but CHIRPS has 320 rows). The models do not need nesting: ERA5 is interpolated
+  to the CHIRPS centres and all models work on the 0.05 deg grid. `check_alignment` checks what
+  that needs: regular grids, a 5:1 spacing ratio, and every CHIRPS centre inside the ERA5
+  points (5.025-20.975 inside 5.0-21.0), so interpolation never extrapolates.
