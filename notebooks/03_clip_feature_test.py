@@ -16,19 +16,28 @@ cross-validation inside the training crops) and scored once on 2024 crops.
 If B or C is not clearly better than A, CLIP adds little that ERA5 does not
 already give the U-Net.
 
-Run alone (it loads CLIP and takes several minutes on a CPU):
-    uv run python notebooks/03_clip_feature_test.py
+--model picks the image encoder; all use the same crops (seed 0):
+  openai      OpenAI CLIP ViT-B/32, the model in the CLIP loss (default)
+  siglip      Google SigLIP ViT-B/16 (webli), a newer CLIP-style model
+  remoteclip  RemoteCLIP ViT-B/32, CLIP fine-tuned on satellite/aerial images
+
+Run alone (it loads the model and takes several minutes on a CPU):
+    uv run python notebooks/03_clip_feature_test.py --model siglip
 """
+
+import argparse
 
 import numpy as np
 import torch
 
 from rainfall_downscaling_baseline.config import load_config
 from rainfall_downscaling_baseline.models.clip_loss import (
+    CLIP_MEAN,
+    CLIP_STD,
     SHARE_BOUNDS,
     VMAX,
     WORDS,
-    ClipAlignmentLoss,
+    rain_to_image,
 )
 from rainfall_downscaling_baseline.models.unet import INPUTS
 from rainfall_downscaling_baseline.preprocessing.pairs import land_mask, load_split
@@ -37,7 +46,46 @@ SIZE, N_TRAIN, N_VAL, PCA_DIMS, THRESHOLD = 128, 1000, 500, 16, 20.0
 ALPHAS = (0.1, 1.0, 10.0, 100.0, 1000.0)
 rng = np.random.default_rng(0)
 cfg = load_config()
-clip = ClipAlignmentLoss(mode="text")
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", choices=("openai", "siglip", "remoteclip"), default="openai")
+MODEL = parser.parse_args().model
+
+
+def load_image_model(name):
+    """Frozen image encoder, its input size and its normalisation (mean, std)."""
+    import open_clip
+
+    if name == "openai":
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-B-32-quickgelu", pretrained="openai"
+        )
+    elif name == "siglip":
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-B-16-SigLIP", pretrained="webli"
+        )
+    else:  # RemoteCLIP ships a plain state dict for open_clip's ViT-B-32
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download("chendelong/RemoteCLIP", "RemoteCLIP-ViT-B-32.pt")
+        model, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32")
+        model.load_state_dict(torch.load(path, map_location="cpu"))
+    norm = next(t for t in preprocess.transforms if type(t).__name__ == "Normalize")
+    size = model.visual.image_size
+    size = size[0] if isinstance(size, tuple | list) else size
+    mean = torch.tensor(norm.mean, dtype=torch.float32).view(1, 3, 1, 1)
+    std = torch.tensor(norm.std, dtype=torch.float32).view(1, 3, 1, 1)
+    return model.eval().requires_grad_(False), int(size), mean, std
+
+
+encoder, IMAGE_SIZE, MEAN, STD = load_image_model(MODEL)
+print(f"image encoder: {MODEL} ({IMAGE_SIZE} px)")
+
+
+def embed(rain, land):
+    """Same colour image as the CLIP loss, normalised the way this encoder expects."""
+    image = rain_to_image(rain, land, IMAGE_SIZE) * CLIP_STD + CLIP_MEAN  # back to 0..1
+    return torch.nn.functional.normalize(encoder.encode_image((image - MEAN) / STD), dim=-1)
 
 
 def sample_windows(land, days, n):
@@ -91,11 +139,11 @@ def summaries(era5, land):
 
 @torch.no_grad()
 def clip_features(field, land):
-    """512-number CLIP embedding of each crop drawn with the rain colour map."""
+    """Image embedding of each crop drawn with the rain colour map."""
     field = torch.tensor(field, dtype=torch.float32)
     land = torch.tensor(land, dtype=torch.float32)
     return torch.cat(
-        [clip._embed(field[i : i + 32], land[i : i + 32]) for i in range(0, len(field), 32)]
+        [embed(field[i : i + 32], land[i : i + 32]) for i in range(0, len(field), 32)]
     ).numpy()
 
 
