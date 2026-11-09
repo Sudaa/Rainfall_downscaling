@@ -44,23 +44,26 @@ class UNet(nn.Module):
 
     Going down halves the grid three times, so inputs are padded to a multiple
     of 8 and the output is cut back to the input size.
+
+    `side_channels` > 0 adds maps at the bottleneck's resolution (1/8 of the
+    grid, e.g. CLIP patch features), joined to the bottleneck's input.
     """
 
-    def __init__(self, in_channels: int, base: int = 32) -> None:
+    def __init__(self, in_channels: int, base: int = 32, side_channels: int = 0) -> None:
         super().__init__()
         c = [base, base * 2, base * 4, base * 8]
         self.down = nn.ModuleList(
             [_block(in_channels, c[0]), _block(c[0], c[1]), _block(c[1], c[2])]
         )
         self.pool = nn.MaxPool2d(2)
-        self.bottom = _block(c[2], c[3])
+        self.bottom = _block(c[2] + side_channels, c[3])
         self.up = nn.ModuleList(
             [nn.ConvTranspose2d(c[i + 1], c[i], 2, stride=2) for i in (2, 1, 0)]
         )
         self.merge = nn.ModuleList([_block(c[i] * 2, c[i]) for i in (2, 1, 0)])
         self.head = nn.Conv2d(c[0], 1, 1)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, side: torch.Tensor | None = None) -> torch.Tensor:
         height, width = x.shape[-2:]
         x = nn.functional.pad(x, (0, -width % 8, 0, -height % 8), mode="reflect")
         skips = []
@@ -68,6 +71,8 @@ class UNet(nn.Module):
             x = block(x)
             skips.append(x)
             x = self.pool(x)
+        if side is not None:
+            x = torch.cat([x, side[..., : x.shape[-2], : x.shape[-1]]], dim=1)
         x = self.bottom(x)
         for up, merge, skip in zip(self.up, self.merge, reversed(skips), strict=True):
             x = merge(torch.cat([up(x), skip], dim=1))
@@ -138,12 +143,16 @@ class UNetDownscaler:
         aux: str = "none",
         aux_weight: float = 0.0,
         thresholds: tuple[float, ...] = (20.0, 50.0),
+        clip_input: bool = False,
     ) -> None:
         """`aux` adds a second loss term judged per region, weighted by `aux_weight` (lambda):
 
         - "count": share of pixels above `thresholds` in crops (no CLIP)
         - "clip": CLIP alignment of crops with a text prompt (Clip4Rain's MRA)
         - "clip-image": CLIP image features only, no text (the ablation)
+
+        `clip_input` also feeds CLIP patch features of the ERA5 rain map into
+        the bottleneck (see clip_features.py). It can be combined with `aux`.
         """
         if aux not in AUX_LOSSES:
             raise ValueError(f"aux must be one of {AUX_LOSSES}, got {aux!r}")
@@ -152,8 +161,12 @@ class UNetDownscaler:
         self.batch_size, self.patch_size = batch_size, patch_size
         self.learning_rate, self.base, self.seed = learning_rate, base, seed
         self.aux, self.aux_weight, self.thresholds = aux, aux_weight, thresholds
+        self.clip_input = clip_input
         self.name = "unet" if aux == "none" else f"unet+{aux}"
+        if clip_input:
+            self.name += "+clip-input"
         self.interpolator = BilinearDownscaler()
+        self.clip_features = None
 
     # --- data ---
 
@@ -166,6 +179,18 @@ class UNetDownscaler:
                 field = to_log(field.clip(min=0))
             channels.append(self.norms[var].transform(field).values.astype(np.float32))
         return np.stack(channels, axis=1)
+
+    def _side(self, coarse: xr.Dataset) -> np.ndarray | None:
+        """CLIP patch-feature maps of the ERA5 rain, or None without `clip_input`."""
+        if not self.clip_input:
+            return None
+        # The same days are often asked for twice (predict, then QM on top): reuse them
+        key = (str(coarse.time.values[0]), str(coarse.time.values[-1]), coarse.sizes["time"])
+        cache = self.__dict__.setdefault("_side_cache", {})
+        if key not in cache:
+            rain = self.interpolator.predict(coarse).clip(min=0).values.astype(np.float32)
+            cache[key] = self.clip_features.transform(rain, self.land)
+        return cache[key]
 
     def _residual(self, coarse: xr.Dataset, fine: xr.DataArray) -> np.ndarray:
         """Training target: log(1 + CHIRPS) - log(1 + bilinear), 0 over the sea."""
@@ -192,12 +217,15 @@ class UNetDownscaler:
             extra = self.clip_loss(pred_rain, true_rain, land)
         return mse + self.aux_weight * extra, mse.item(), extra.item()
 
-    def _predict_residual(self, inputs: np.ndarray) -> np.ndarray:
+    def _predict_residual(self, inputs: np.ndarray, side: np.ndarray | None = None) -> np.ndarray:
         """Run the network on whole fields, a few days at a time."""
         self.net.eval()
         with torch.no_grad():
             parts = [
-                self.net(torch.from_numpy(inputs[i : i + self.batch_size])).numpy()
+                self.net(
+                    torch.from_numpy(inputs[i : i + self.batch_size]),
+                    None if side is None else torch.from_numpy(side[i : i + self.batch_size]),
+                ).numpy()
                 for i in range(0, len(inputs), self.batch_size)
             ]
         return np.concatenate(parts)
@@ -218,20 +246,33 @@ class UNetDownscaler:
             from .clip_loss import ClipAlignmentLoss  # loads CLIP only when it is needed
 
             self.clip_loss = ClipAlignmentLoss(mode="image" if self.aux == "clip-image" else "text")
+        if self.clip_input:
+            from .clip_features import ClipPatchFeatures  # loads CLIP only when it is needed
+
+            rain = self.interpolator.predict(coarse).clip(min=0).values.astype(np.float32)
+            print("CLIP patch features: fitting PCA ...", flush=True)
+            self.clip_features = ClipPatchFeatures(tile=self.patch_size).fit(rain, self.land)
+            print("CLIP patch features: training days ...", flush=True)
+        side = self._side(coarse)
         patches = PairedPatches(
             self._inputs(coarse),
             self._residual(coarse, fine),
             self.land,
             self.patch_size,
             self.seed,
+            side,
         )
         loader = DataLoader(patches, batch_size=self.batch_size, shuffle=True)
+        val_side = None
         if self.val is not None:
-            val_inputs = self._inputs(self.val[0])
+            if self.clip_input:
+                print("CLIP patch features: validation days ...", flush=True)
+            val_inputs, val_side = self._inputs(self.val[0]), self._side(self.val[0])
             val_target = torch.from_numpy(self._residual(*self.val))
         land = torch.from_numpy(self.land.astype(np.float32))
 
-        self.net = UNet(len(INPUTS), self.base)
+        side_channels = self.clip_features.dims if self.clip_input else 0
+        self.net = UNet(len(INPUTS), self.base, side_channels)
         optimiser = torch.optim.Adam(self.net.parameters(), lr=self.learning_rate)
         best_loss, best_weights, waited = float("inf"), None, 0
         self.history = []
@@ -239,16 +280,16 @@ class UNetDownscaler:
             start = time.time()
             self.net.train()
             losses = []
-            for x, y, mask in loader:
+            for x, y, mask, *side_batch in loader:
                 optimiser.zero_grad()
-                loss, _, _ = self._loss(x, self.net(x), y, mask)
+                loss, _, _ = self._loss(x, self.net(x, *side_batch), y, mask)
                 loss.backward()
                 optimiser.step()
                 losses.append(loss.item())
             train_loss = float(np.mean(losses))
             # Early stopping uses the same total loss on whole validation fields
             if self.val is not None:
-                val_loss, mse, extra = self._validation_loss(val_inputs, val_target, land)
+                val_loss, mse, extra = self._validation_loss(val_inputs, val_target, land, val_side)
             else:
                 val_loss, mse, extra = train_loss, float("nan"), float("nan")
             self.history.append(
@@ -276,9 +317,9 @@ class UNetDownscaler:
                     break
         self.net.load_state_dict(best_weights)
 
-    def _validation_loss(self, inputs: np.ndarray, target: torch.Tensor, land: torch.Tensor):
+    def _validation_loss(self, inputs, target, land, side=None):
         """Mean loss over the validation days, a few days at a time (CLIP is memory hungry)."""
-        residual = torch.from_numpy(self._predict_residual(inputs))
+        residual = torch.from_numpy(self._predict_residual(inputs, side))
         totals, mses, extras = [], [], []
         with torch.no_grad():
             for i in range(0, len(inputs), self.batch_size):
@@ -296,7 +337,7 @@ class UNetDownscaler:
 
     def predict(self, coarse: xr.Dataset) -> xr.DataArray:
         bilinear = self.interpolator.predict(coarse).clip(min=0)
-        residual = self._predict_residual(self._inputs(coarse))
+        residual = self._predict_residual(self._inputs(coarse), self._side(coarse))
         return from_log(to_log(bilinear) + residual).rename("precip")
 
     # --- saving, so evaluate does not have to train again ---
@@ -315,6 +356,8 @@ class UNetDownscaler:
                 "lon": torch.tensor(self.interpolator.lon.values),
                 "land": torch.tensor(self.land),
                 "history": self.history,
+                "clip_input": self.clip_input,
+                "clip_features": self.clip_features.state() if self.clip_input else None,
             },
             path,
         )
@@ -332,12 +375,19 @@ class UNetDownscaler:
             aux=aux,
             aux_weight=aux_weight,
             thresholds=saved.get("thresholds", (20.0, 50.0)),
+            clip_input=saved.get("clip_input", False),
         )
         model.norms = {var: Normalizer(*stats) for var, stats in saved["norms"].items()}
         lat, lon = saved["lat"].numpy(), saved["lon"].numpy()
         model.interpolator.lat = xr.DataArray(lat, coords={"lat": lat})
         model.interpolator.lon = xr.DataArray(lon, coords={"lon": lon})
         model.land, model.history = saved["land"].numpy(), saved["history"]
-        model.net = UNet(len(INPUTS), model.base)
+        side_channels = 0
+        if model.clip_input:
+            from .clip_features import ClipPatchFeatures
+
+            model.clip_features = ClipPatchFeatures.from_state(saved["clip_features"])
+            side_channels = model.clip_features.dims
+        model.net = UNet(len(INPUTS), model.base, side_channels)
         model.net.load_state_dict(saved["weights"])
         return model

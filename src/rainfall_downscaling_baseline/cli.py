@@ -50,7 +50,9 @@ def cmd_prepare(cfg: Config) -> None:
     print(f"saved to {cfg.paths.processed}")
 
 
-def cmd_train(cfg: Config, aux: str = "none", aux_weight: float = 0.0) -> None:
+def cmd_train(
+    cfg: Config, aux: str = "none", aux_weight: float = 0.0, clip_input: bool = False
+) -> None:
     """Train the U-Net on the training years, stopping early on the validation year.
 
     The baselines train in seconds, so evaluate fits them itself; only the
@@ -60,11 +62,17 @@ def cmd_train(cfg: Config, aux: str = "none", aux_weight: float = 0.0) -> None:
     from .models.unet import UNetDownscaler
     from .preprocessing.pairs import load_split
 
-    model = UNetDownscaler(val=load_split(cfg, "val"), aux=aux, aux_weight=aux_weight)
+    model = UNetDownscaler(
+        val=load_split(cfg, "val"), aux=aux, aux_weight=aux_weight, clip_input=clip_input
+    )
     model.fit(*load_split(cfg, "train"))
     out = cfg.paths.checkpoints / f"{model.name.replace('+', '_')}.pt"
     model.save(out)
     print(f"saved {out}")
+
+
+# U-Nets that also get quantile mapping on top at evaluation
+QM_ON_TOP = ("unet", "unet+clip-input")
 
 
 def cmd_evaluate(cfg: Config, split: str = "val") -> None:
@@ -91,8 +99,8 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
 
         unet = UNetDownscaler.load(checkpoint)
         predictions[unet.name] = unet.predict(coarse)
-        if unet.name == "unet":
-            # Quantile mapping on top of the plain U-Net, fitted on its training-year output
+        if unet.name in QM_ON_TOP:
+            # Quantile mapping on top of the U-Net, fitted on its training-year output
             unet_qm = QuantileMappingDownscaler(base=unet)
             unet_qm.fit(train_coarse, train_fine)
             predictions[unet_qm.name] = unet_qm.predict(coarse)
@@ -105,15 +113,15 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     table.to_csv(out)
     print(f"saved {out}")
 
-    from .evaluation.plots import exceedance, map_panel, wettest_day
+    from .evaluation.plots import FIGURE_SKIP, exceedance, map_panel, wettest_day
 
     land = land_mask(obs)
     day = wettest_day(obs)
+    # Figures hold at most 8 models (one fixed colour each); the score table has all
+    shown = {k: v for k, v in predictions.items() if k not in FIGURE_SKIP}
     for path in (
-        map_panel(
-            coarse["precip"], predictions, obs, land, day, cfg.paths.figures / f"maps_{split}.png"
-        ),
-        exceedance(predictions, obs, land, cfg.paths.figures / f"exceedance_{split}.png"),
+        map_panel(coarse["precip"], shown, obs, land, day, cfg.paths.figures / f"maps_{split}.png"),
+        exceedance(shown, obs, land, cfg.paths.figures / f"exceedance_{split}.png"),
     ):
         print(f"saved {path}")
 
@@ -145,11 +153,16 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--aux-weight", type=float, default=0.0, help="lambda of the extra loss (train only)"
     )
+    parser.add_argument(
+        "--clip-input",
+        action="store_true",
+        help="feed CLIP patch features of the ERA5 rain map into the U-Net (train only)",
+    )
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     if args.command == "evaluate":
         cmd_evaluate(cfg, args.split)
     elif args.command == "train":
-        cmd_train(cfg, args.aux, args.aux_weight)
+        cmd_train(cfg, args.aux, args.aux_weight, args.clip_input)
     else:
         COMMANDS[args.command](cfg)

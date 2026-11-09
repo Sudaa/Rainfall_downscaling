@@ -35,6 +35,23 @@ LABELS = {
     "unet+count": "U-Net + count loss",
     "unet+clip": "U-Net + CLIP (text)",
     "unet+clip-image": "U-Net + CLIP (image)",
+    "unet+clip-input": "U-Net + CLIP input",
+    "unet+clip-input+qm": "U-Net + CLIP input + QM",
+}
+# Left out of figures (still in the score table): the image-only CLIP ablation is
+# almost the same line as CLIP (text), and a 9th model would need a 9th colour.
+FIGURE_SKIP = ("unet+clip-image",)
+# Each model keeps its own colour in every figure, whichever models are shown.
+# The image-only ablation is never drawn, so its former pink went to CLIP input + QM.
+COLOUR_OF = {
+    "bilinear": MODEL_COLOURS[0],
+    "quantile_mapping": MODEL_COLOURS[1],
+    "unet": MODEL_COLOURS[2],
+    "unet+qm": MODEL_COLOURS[3],
+    "unet+clip-input+qm": MODEL_COLOURS[4],
+    "unet+clip-input": MODEL_COLOURS[5],
+    "unet+clip": MODEL_COLOURS[6],
+    "unet+count": MODEL_COLOURS[7],
 }
 FLOOR = 1e-5  # bottom of the log axis in exceedance()
 
@@ -96,9 +113,8 @@ def exceedance(
     fig, ax = plt.subplots(figsize=(8, 4.8))
     lines = {
         LABELS.get(name, name): (curve(pred), colour)
-        for (name, pred), colour in zip(
-            predictions.items(), MODEL_COLOURS[: len(predictions)], strict=True
-        )
+        for name, pred in predictions.items()
+        for colour in [COLOUR_OF.get(name, MUTED)]
     }
     lines["CHIRPS (observed)"] = (curve(obs), INK)
     ends = []  # (log10 of y, x, name) where each curve leaves the plot
