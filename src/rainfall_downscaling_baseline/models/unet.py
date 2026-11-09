@@ -127,6 +127,7 @@ LOG_MAX = float(np.log1p(1000.0))  # cap on log(1 + rain) before exp, so it cann
 
 
 AUX_LOSSES = ("none", "count", "clip", "clip-image")
+_SIDE_CACHE: dict = {}  # CLIP feature maps already computed in this run
 
 
 class UNetDownscaler:
@@ -186,11 +187,12 @@ class UNetDownscaler:
             return None
         # The same days are often asked for twice (predict, then QM on top): reuse them
         key = (str(coarse.time.values[0]), str(coarse.time.values[-1]), coarse.sizes["time"])
-        cache = self.__dict__.setdefault("_side_cache", {})
-        if key not in cache:
+        # PCA does not depend on the seed, so other seeds' models share these maps
+        key += (float(self.clip_features.components.sum()), float(self.clip_features.mean.sum()))
+        if key not in _SIDE_CACHE:
             rain = self.interpolator.predict(coarse).clip(min=0).values.astype(np.float32)
-            cache[key] = self.clip_features.transform(rain, self.land)
-        return cache[key]
+            _SIDE_CACHE[key] = self.clip_features.transform(rain, self.land)
+        return _SIDE_CACHE[key]
 
     def _residual(self, coarse: xr.Dataset, fine: xr.DataArray) -> np.ndarray:
         """Training target: log(1 + CHIRPS) - log(1 + bilinear), 0 over the sea."""
@@ -356,6 +358,8 @@ class UNetDownscaler:
                 "lon": torch.tensor(self.interpolator.lon.values),
                 "land": torch.tensor(self.land),
                 "history": self.history,
+                "seed": self.seed,
+                "patience": self.patience,
                 "clip_input": self.clip_input,
                 "clip_features": self.clip_features.state() if self.clip_input else None,
             },
@@ -376,6 +380,8 @@ class UNetDownscaler:
             aux_weight=aux_weight,
             thresholds=saved.get("thresholds", (20.0, 50.0)),
             clip_input=saved.get("clip_input", False),
+            seed=saved.get("seed", 0),
+            patience=saved.get("patience", 5),
         )
         model.norms = {var: Normalizer(*stats) for var, stats in saved["norms"].items()}
         lat, lon = saved["lat"].numpy(), saved["lon"].numpy()

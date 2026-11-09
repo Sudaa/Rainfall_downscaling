@@ -51,24 +51,47 @@ def cmd_prepare(cfg: Config) -> None:
 
 
 def cmd_train(
-    cfg: Config, aux: str = "none", aux_weight: float = 0.0, clip_input: bool = False
+    cfg: Config,
+    aux: str = "none",
+    aux_weight: float = 0.0,
+    clip_input: bool = False,
+    seed: int = 0,
+    patience: int = 5,
 ) -> None:
     """Train the U-Net on the training years, stopping early on the validation year.
 
     The baselines train in seconds, so evaluate fits them itself; only the
     U-Net is trained here and saved for evaluate to load. With `aux` it adds a
     second loss term (count, clip or clip-image) and is saved under its own name.
+    Seeds other than 0 are repeat runs, saved with `_seed<n>` added to the name.
     """
     from .models.unet import UNetDownscaler
     from .preprocessing.pairs import load_split
 
     model = UNetDownscaler(
-        val=load_split(cfg, "val"), aux=aux, aux_weight=aux_weight, clip_input=clip_input
+        val=load_split(cfg, "val"),
+        aux=aux,
+        aux_weight=aux_weight,
+        clip_input=clip_input,
+        seed=seed,
+        patience=patience,
     )
     model.fit(*load_split(cfg, "train"))
-    out = cfg.paths.checkpoints / f"{model.name.replace('+', '_')}.pt"
+    out = cfg.paths.checkpoints / f"{model.name.replace('+', '_')}{seed_suffix(seed, '_')}.pt"
     model.save(out)
     print(f"saved {out}")
+
+
+def seed_suffix(seed: int, style: str = " ") -> str:
+    """'' for seed 0 (the original runs), else ' (seed n)' in tables or '_seed<n>' in files."""
+    if seed == 0:
+        return ""
+    return f" (seed {seed})" if style == " " else f"_seed{seed}"
+
+
+def base_model(name: str) -> str:
+    """Model name without its seed: 'unet+qm (seed 2)' -> 'unet+qm'."""
+    return name.split(" (seed ")[0]
 
 
 # U-Nets that also get quantile mapping on top at evaluation
@@ -98,12 +121,14 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
         from .models.unet import UNetDownscaler
 
         unet = UNetDownscaler.load(checkpoint)
-        predictions[unet.name] = unet.predict(coarse)
+        suffix = seed_suffix(unet.seed)
+        print(f"predicting with {checkpoint.name} ...", flush=True)
+        predictions[unet.name + suffix] = unet.predict(coarse)
         if unet.name in QM_ON_TOP:
             # Quantile mapping on top of the U-Net, fitted on its training-year output
             unet_qm = QuantileMappingDownscaler(base=unet)
             unet_qm.fit(train_coarse, train_fine)
-            predictions[unet_qm.name] = unet_qm.predict(coarse)
+            predictions[unet_qm.name + suffix] = unet_qm.predict(coarse)
 
     table = evaluate(predictions, obs, land_mask(obs), cfg.eval_regions)
     print(f"Scores on {split} ({obs.sizes['time']} days, land only)")
@@ -112,18 +137,42 @@ def cmd_evaluate(cfg: Config, split: str = "val") -> None:
     out = cfg.paths.figures / f"scores_{split}.csv"
     table.to_csv(out)
     print(f"saved {out}")
+    summarise_seeds(table, cfg.paths.figures / f"scores_{split}_seeds.csv")
 
     from .evaluation.plots import FIGURE_SKIP, exceedance, map_panel, wettest_day
 
     land = land_mask(obs)
     day = wettest_day(obs)
-    # Figures hold at most 8 models (one fixed colour each); the score table has all
-    shown = {k: v for k, v in predictions.items() if k not in FIGURE_SKIP}
+    # Figures hold at most 8 models (one fixed colour each) and only the seed-0
+    # runs; the score table has all of them
+    shown = {k: v for k, v in predictions.items() if k not in FIGURE_SKIP and base_model(k) == k}
     for path in (
         map_panel(coarse["precip"], shown, obs, land, day, cfg.paths.figures / f"maps_{split}.png"),
         exceedance(shown, obs, land, cfg.paths.figures / f"exceedance_{split}.png"),
     ):
         print(f"saved {path}")
+
+
+def summarise_seeds(table, out) -> None:
+    """Mean, and spread (min to max), of each score over the seeds of each model.
+
+    Only printed when some model has repeat runs: one run can win or lose by
+    luck, the mean over seeds is what a comparison should rest on.
+    """
+    table = table.reset_index()
+    table["base"] = table["model"].map(base_model)
+    runs = table.groupby(["region", "base"])["model"].count()
+    if runs.max() <= 1:
+        return
+    scores = ["mae", "bias", "corr", "csi_20mm", "csi_50mm"]
+    grouped = table.groupby(["region", "base"])[scores]
+    summary = grouped.mean().round(3)
+    spread = (grouped.max() - grouped.min()).round(3).add_suffix("_range")
+    summary = summary.join(spread).join(runs.rename("runs"))
+    print("\nMean over seeds (and range = max - min):")
+    print(summary.to_string())
+    summary.to_csv(out)
+    print(f"saved {out}")
 
 
 COMMANDS = {
@@ -158,11 +207,20 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="feed CLIP patch features of the ERA5 rain map into the U-Net (train only)",
     )
+    parser.add_argument(
+        "--seed", type=int, default=0, help="random seed; not 0 = a repeat run (train only)"
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=5,
+        help="epochs without validation improvement before stopping (train only)",
+    )
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     if args.command == "evaluate":
         cmd_evaluate(cfg, args.split)
     elif args.command == "train":
-        cmd_train(cfg, args.aux, args.aux_weight, args.clip_input)
+        cmd_train(cfg, args.aux, args.aux_weight, args.clip_input, args.seed, args.patience)
     else:
         COMMANDS[args.command](cfg)
