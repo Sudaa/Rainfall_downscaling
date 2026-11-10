@@ -57,6 +57,7 @@ def cmd_train(
     clip_input: bool = False,
     seed: int = 0,
     patience: int = 5,
+    clip_random: bool = False,
 ) -> None:
     """Train the U-Net on the training years, stopping early on the validation year.
 
@@ -73,6 +74,7 @@ def cmd_train(
         aux=aux,
         aux_weight=aux_weight,
         clip_input=clip_input,
+        clip_random=clip_random,
         seed=seed,
         patience=patience,
     )
@@ -95,7 +97,7 @@ def base_model(name: str) -> str:
 
 
 # U-Nets that also get quantile mapping on top at evaluation
-QM_ON_TOP = ("unet", "unet+clip-input")
+QM_ON_TOP = ("unet", "unet+clip-input", "unet+clip-input-random")
 
 
 def cmd_evaluate(cfg: Config, split: str = "val") -> None:
@@ -208,6 +210,11 @@ def main(argv: list[str] | None = None) -> None:
         help="feed CLIP patch features of the ERA5 rain map into the U-Net (train only)",
     )
     parser.add_argument(
+        "--clip-random",
+        action="store_true",
+        help="control: like --clip-input, but the image network has random weights (train only)",
+    )
+    parser.add_argument(
         "--seed", type=int, default=0, help="random seed; not 0 = a repeat run (train only)"
     )
     parser.add_argument(
@@ -221,6 +228,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "evaluate":
         cmd_evaluate(cfg, args.split)
     elif args.command == "train":
-        cmd_train(cfg, args.aux, args.aux_weight, args.clip_input, args.seed, args.patience)
+        cmd_train(
+            cfg,
+            args.aux,
+            args.aux_weight,
+            args.clip_input,
+            args.seed,
+            args.patience,
+            args.clip_random,
+        )
     else:
         COMMANDS[args.command](cfg)

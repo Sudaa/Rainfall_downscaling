@@ -59,7 +59,7 @@ def test_unet_trains_saves_and_loads_with_clip_input(monkeypatch, tmp_path):
 
     from rainfall_downscaling_baseline.models.unet import UNetDownscaler
 
-    monkeypatch.setattr(clip_features, "openai_patch_encoder", lambda: fake_encoder)
+    monkeypatch.setattr(clip_features, "openai_patch_encoder", lambda pretrained=True: fake_encoder)
     train, val = _toy_pair(16, seed=1), _toy_pair(8, seed=2)
     model = UNetDownscaler(val=val, epochs=2, batch_size=4, patch_size=16, base=4, clip_input=True)
     model.fit(*train)
@@ -72,3 +72,32 @@ def test_unet_trains_saves_and_loads_with_clip_input(monkeypatch, tmp_path):
     loaded = UNetDownscaler.load(tmp_path / "m.pt")
     assert loaded.clip_input
     assert np.allclose(loaded.predict(val[0]), pred, atol=1e-5)
+
+
+def test_unet_with_random_control_is_named_and_reloaded(monkeypatch, tmp_path):
+    from test_unet import _toy_pair
+
+    from rainfall_downscaling_baseline.models.unet import UNetDownscaler
+
+    asked = []
+    monkeypatch.setattr(
+        clip_features,
+        "openai_patch_encoder",
+        lambda pretrained=True: asked.append(pretrained) or fake_encoder,
+    )
+    train, val = _toy_pair(16, seed=1), _toy_pair(8, seed=2)
+    model = UNetDownscaler(val=val, epochs=1, batch_size=4, patch_size=16, base=4, clip_random=True)
+    model.fit(*train)
+    assert model.name == "unet+clip-input-random"
+    assert asked == [False]  # the random-weight network was requested
+    model.save(tmp_path / "m.pt")
+    loaded = UNetDownscaler.load(tmp_path / "m.pt")
+    assert loaded.clip_random and loaded.clip_features.pretrained is False
+
+
+def test_random_encoder_is_the_same_every_time():
+    a = clip_features.openai_patch_encoder(pretrained=False)
+    b = clip_features.openai_patch_encoder(pretrained=False)
+    images = torch.rand(2, 3, 224, 224)
+    with torch.no_grad():
+        assert torch.allclose(a(images), b(images))

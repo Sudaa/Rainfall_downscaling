@@ -12,6 +12,10 @@ resolution (1/8 of the fine grid), and overlapping tiles are averaged.
 Because every feature always comes from a tile of the same size, a random
 training patch and a whole field at prediction time see features at the same
 scale. Only ERA5 is used, so this works for any day, including the test year.
+
+`pretrained=False` is the control experiment: the same ViT-B/32 with random
+weights (always the same ones, from a fixed seed), so everything is identical
+except what CLIP learned from 400 million image-caption pairs.
 """
 
 import numpy as np
@@ -21,13 +25,24 @@ import torch.nn.functional as F
 from .clip_loss import rain_to_image
 
 DOWN = 8  # the U-Net halves the grid three times
+RANDOM_SEED = 1234  # fixes the random weights of the control encoder
 
 
-def openai_patch_encoder():
-    """OpenAI CLIP ViT-B/32 as a function: images (n, 3, 224, 224) -> (n, 768, 7, 7)."""
+def openai_patch_encoder(pretrained: bool = True):
+    """OpenAI CLIP ViT-B/32 as a function: images (n, 3, 224, 224) -> (n, 768, 7, 7).
+
+    With `pretrained=False` the same network has random weights instead.
+    """
     import open_clip
 
-    model, _, _ = open_clip.create_model_and_transforms("ViT-B-32-quickgelu", pretrained="openai")
+    if pretrained:
+        model, _, _ = open_clip.create_model_and_transforms(
+            "ViT-B-32-quickgelu", pretrained="openai"
+        )
+    else:
+        with torch.random.fork_rng():  # do not disturb the training seed
+            torch.manual_seed(RANDOM_SEED)
+            model, _, _ = open_clip.create_model_and_transforms("ViT-B-32-quickgelu")
     visual = model.visual.eval().requires_grad_(False)
     visual.output_tokens = True
 
@@ -41,8 +56,16 @@ def openai_patch_encoder():
 
 
 class ClipPatchFeatures:
-    def __init__(self, tile: int = 128, dims: int = 32, encoder=None, batch: int = 32) -> None:
+    def __init__(
+        self,
+        tile: int = 128,
+        dims: int = 32,
+        encoder=None,
+        batch: int = 32,
+        pretrained: bool = True,
+    ) -> None:
         """`encoder` defaults to OpenAI CLIP (loaded when first needed); tests pass a stand-in."""
+        self.pretrained = pretrained
         if tile % DOWN:
             raise ValueError(f"tile must be a multiple of {DOWN}, got {tile}")
         self.tile, self.dims, self.batch = tile, dims, batch
@@ -53,7 +76,7 @@ class ClipPatchFeatures:
     @property
     def encoder(self):
         if self._encoder is None:
-            self._encoder = openai_patch_encoder()
+            self._encoder = openai_patch_encoder(self.pretrained)
         return self._encoder
 
     # --- tiling ---
@@ -148,11 +171,17 @@ class ClipPatchFeatures:
             "mean": self.mean,
             "components": self.components,
             "std": self.std,
+            "pretrained": self.pretrained,
         }
 
     @classmethod
     def from_state(cls, state: dict, encoder=None) -> "ClipPatchFeatures":
-        features = cls(tile=state["tile"], dims=state["dims"], encoder=encoder)
+        features = cls(
+            tile=state["tile"],
+            dims=state["dims"],
+            encoder=encoder,
+            pretrained=state.get("pretrained", True),
+        )
         features.mean, features.components, features.std = (
             state["mean"],
             state["components"],

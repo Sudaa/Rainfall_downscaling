@@ -145,6 +145,7 @@ class UNetDownscaler:
         aux_weight: float = 0.0,
         thresholds: tuple[float, ...] = (20.0, 50.0),
         clip_input: bool = False,
+        clip_random: bool = False,
     ) -> None:
         """`aux` adds a second loss term judged per region, weighted by `aux_weight` (lambda):
 
@@ -154,6 +155,7 @@ class UNetDownscaler:
 
         `clip_input` also feeds CLIP patch features of the ERA5 rain map into
         the bottleneck (see clip_features.py). It can be combined with `aux`.
+        `clip_random` uses the same network with random weights (the control).
         """
         if aux not in AUX_LOSSES:
             raise ValueError(f"aux must be one of {AUX_LOSSES}, got {aux!r}")
@@ -162,10 +164,11 @@ class UNetDownscaler:
         self.batch_size, self.patch_size = batch_size, patch_size
         self.learning_rate, self.base, self.seed = learning_rate, base, seed
         self.aux, self.aux_weight, self.thresholds = aux, aux_weight, thresholds
-        self.clip_input = clip_input
+        self.clip_input = clip_input or clip_random
+        self.clip_random = clip_random
         self.name = "unet" if aux == "none" else f"unet+{aux}"
-        if clip_input:
-            self.name += "+clip-input"
+        if self.clip_input:
+            self.name += "+clip-input-random" if clip_random else "+clip-input"
         self.interpolator = BilinearDownscaler()
         self.clip_features = None
 
@@ -253,7 +256,9 @@ class UNetDownscaler:
 
             rain = self.interpolator.predict(coarse).clip(min=0).values.astype(np.float32)
             print("CLIP patch features: fitting PCA ...", flush=True)
-            self.clip_features = ClipPatchFeatures(tile=self.patch_size).fit(rain, self.land)
+            self.clip_features = ClipPatchFeatures(
+                tile=self.patch_size, pretrained=not self.clip_random
+            ).fit(rain, self.land)
             print("CLIP patch features: training days ...", flush=True)
         side = self._side(coarse)
         patches = PairedPatches(
@@ -361,6 +366,7 @@ class UNetDownscaler:
                 "seed": self.seed,
                 "patience": self.patience,
                 "clip_input": self.clip_input,
+                "clip_random": self.clip_random,
                 "clip_features": self.clip_features.state() if self.clip_input else None,
             },
             path,
@@ -380,6 +386,7 @@ class UNetDownscaler:
             aux_weight=aux_weight,
             thresholds=saved.get("thresholds", (20.0, 50.0)),
             clip_input=saved.get("clip_input", False),
+            clip_random=saved.get("clip_random", False),
             seed=saved.get("seed", 0),
             patience=saved.get("patience", 5),
         )

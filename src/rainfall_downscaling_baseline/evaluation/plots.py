@@ -37,10 +37,13 @@ LABELS = {
     "unet+clip-image": "U-Net + CLIP (image)",
     "unet+clip-input": "U-Net + CLIP input",
     "unet+clip-input+qm": "U-Net + CLIP input + QM",
+    "unet+clip-input-random": "U-Net + random-ViT input",
+    "unet+clip-input-random+qm": "U-Net + random-ViT input + QM",
 }
 # Left out of figures (still in the score table): the image-only CLIP ablation is
 # almost the same line as CLIP (text), and a 9th model would need a 9th colour.
-FIGURE_SKIP = ("unet+clip-image",)
+# The random-weight control is compared in the score tables, not the figures.
+FIGURE_SKIP = ("unet+clip-image", "unet+clip-input-random", "unet+clip-input-random+qm")
 # Each model keeps its own colour in every figure, whichever models are shown.
 # The image-only ablation is never drawn, so its former pink went to CLIP input + QM.
 COLOUR_OF = {
