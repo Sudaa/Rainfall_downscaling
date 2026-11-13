@@ -1,0 +1,94 @@
+predicting with unet.pt ...
+predicting with unet_clip-image.pt ...
+predicting with unet_clip-input-random.pt ...
+WARNING:root:No pretrained weights loaded for model 'ViT-B-32-quickgelu'. Model initialized randomly.
+predicting with unet_clip-input-random_seed1.pt ...
+predicting with unet_clip-input-random_seed2.pt ...
+predicting with unet_clip-input.pt ...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+WARNING:huggingface_hub.utils._http:Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+predicting with unet_clip-input_seed1.pt ...
+predicting with unet_clip-input_seed2.pt ...
+predicting with unet_clip.pt ...
+predicting with unet_count.pt ...
+predicting with unet_seed1.pt ...
+predicting with unet_seed2.pt ...
+Scores on test (183 days, land only)
+                                              mae    rmse   bias   corr  hit_rate_1mm  far_1mm  csi_1mm  hit_rate_20mm  far_20mm  csi_20mm  hit_rate_50mm  far_50mm  csi_50mm
+region  model                                                                                                                                                                
+all     bilinear                            8.244  13.678 -0.472  0.418         0.927    0.347    0.621          0.292     0.574     0.209          0.150     0.724     0.107
+        quantile_mapping                    9.023  15.738  0.232  0.432         0.700    0.271    0.556          0.393     0.605     0.245          0.299     0.769     0.150
+        unet                                7.459  13.254 -4.625  0.475         0.942    0.335    0.639          0.043     0.228     0.042          0.000     0.899     0.000
+        unet+qm                             8.457  14.750  0.100  0.474         0.727    0.250    0.585          0.416     0.580     0.265          0.321     0.742     0.167
+        unet+clip-image                     7.493  13.310 -4.563  0.439         0.933    0.329    0.640          0.059     0.367     0.057          0.008     0.668     0.008
+        unet+clip-input-random              7.279  13.055 -4.572  0.490         0.939    0.329    0.643          0.072     0.234     0.071          0.007     0.560     0.007
+        unet+clip-input-random+qm           8.204  14.521 -0.229  0.496         0.718    0.235    0.589          0.420     0.550     0.278          0.327     0.748     0.166
+        unet+clip-input-random (seed 1)     7.365  13.078 -4.508  0.493         0.952    0.337    0.641          0.062     0.224     0.061          0.001     0.791     0.001
+        unet+clip-input-random+qm (seed 1)  8.294  14.465 -0.179  0.489         0.714    0.243    0.581          0.419     0.561     0.273          0.315     0.742     0.165
+        unet+clip-input-random (seed 2)     7.377  13.052 -4.105  0.458         0.968    0.352    0.635          0.083     0.339     0.080          0.000     0.818     0.000
+        unet+clip-input-random+qm (seed 2)  8.256  14.493 -0.430  0.470         0.706    0.242    0.576          0.410     0.559     0.270          0.269     0.760     0.145
+        unet+clip-input                     7.506  13.539 -5.116  0.486         0.937    0.329    0.642          0.023     0.125     0.023          0.000       NaN     0.000
+        unet+clip-input+qm                  8.104  14.166 -0.392  0.485         0.723    0.239    0.589          0.411     0.559     0.270          0.282     0.733     0.159
+        unet+clip-input (seed 1)            7.461  13.435 -5.014  0.481         0.932    0.326    0.642          0.026     0.191     0.026          0.000     0.673     0.000
+        unet+clip-input+qm (seed 1)         8.149  14.160 -0.216  0.487         0.727    0.245    0.589          0.423     0.559     0.275          0.291     0.737     0.160
+        unet+clip-input (seed 2)            7.385  13.048 -4.000  0.442         0.967    0.350    0.636          0.104     0.355     0.098          0.029     0.677     0.027
+        unet+clip-input+qm (seed 2)         8.418  14.902 -0.018  0.470         0.725    0.243    0.588          0.417     0.570     0.268          0.304     0.755     0.157
+        unet+clip                           7.667  13.551 -4.497  0.386         0.943    0.343    0.632          0.040     0.433     0.038          0.007     0.778     0.007
+        unet+count                          7.764  13.694 -2.957  0.390         0.950    0.341    0.637          0.193     0.534     0.158          0.096     0.717     0.077
+        unet (seed 1)                       7.611  13.468 -4.712  0.439         0.962    0.353    0.631          0.032     0.304     0.032          0.003     0.634     0.003
+        unet+qm (seed 1)                    8.612  14.954 -0.048  0.442         0.716    0.256    0.574          0.400     0.591     0.253          0.265     0.774     0.139
+        unet (seed 2)                       7.437  13.190 -4.555  0.475         0.955    0.344    0.636          0.051     0.237     0.051          0.000     0.250     0.000
+        unet+qm (seed 2)                    8.293  14.441 -0.099  0.486         0.721    0.249    0.582          0.418     0.565     0.271          0.310     0.738     0.165
+bangkok bilinear                            5.395   7.593 -1.510  0.530         0.872    0.252    0.674          0.231     0.561     0.178          0.000     1.000     0.000
+        quantile_mapping                    6.052   9.036 -0.172  0.524         0.788    0.204    0.656          0.265     0.674     0.171          0.200     0.993     0.006
+        unet                                5.134   7.370 -2.833  0.579         0.967    0.275    0.707          0.015     0.152     0.015          0.000       NaN     0.000
+        unet+qm                             5.708   8.477 -0.067  0.542         0.823    0.211    0.675          0.276     0.657     0.181          0.200     0.991     0.009
+        unet+clip-image                     5.308   7.694 -3.288  0.542         0.956    0.276    0.701          0.069     0.122     0.068          0.000       NaN     0.000
+        unet+clip-input-random              5.277   7.688 -3.313  0.557         0.941    0.280    0.688          0.003     0.000     0.003          0.000       NaN     0.000
+        unet+clip-input-random+qm           5.612   8.076 -0.346  0.535         0.814    0.212    0.668          0.260     0.650     0.176          0.200     0.986     0.013
+        unet+clip-input-random (seed 1)     5.432   7.896 -3.541  0.532         0.931    0.268    0.694          0.000       NaN     0.000          0.000       NaN     0.000
+        unet+clip-input-random+qm (seed 1)  5.647   7.973 -0.631  0.504         0.813    0.210    0.668          0.218     0.651     0.155          0.200     0.956     0.038
+        unet+clip-input-random (seed 2)     5.177   7.364 -2.615  0.549         0.965    0.298    0.685          0.012     0.603     0.012          0.000       NaN     0.000
+        unet+clip-input-random+qm (seed 2)  5.504   7.829 -0.894  0.520         0.787    0.223    0.642          0.213     0.667     0.149          0.000     1.000     0.000
+        unet+clip-input                     5.521   8.025 -3.446  0.514         0.949    0.275    0.698          0.000       NaN     0.000          0.000       NaN     0.000
+        unet+clip-input+qm                  5.864   8.492 -0.389  0.473         0.824    0.209    0.677          0.267     0.685     0.169          0.000     1.000     0.000
+        unet+clip-input (seed 1)            5.321   7.672 -3.146  0.556         0.976    0.280    0.707          0.000       NaN     0.000          0.000       NaN     0.000
+        unet+clip-input+qm (seed 1)         5.721   8.428 -0.245  0.534         0.831    0.219    0.675          0.287     0.650     0.187          0.200     0.991     0.009
+        unet+clip-input (seed 2)            5.277   7.517 -2.779  0.526         0.975    0.292    0.695          0.155     0.180     0.150          0.000       NaN     0.000
+        unet+clip-input+qm (seed 2)         6.041   8.802 -0.057  0.519         0.812    0.215    0.665          0.277     0.647     0.184          0.200     0.993     0.007
+        unet+clip                           5.244   7.406 -2.501  0.541         0.982    0.289    0.702          0.044     0.162     0.044          0.000       NaN     0.000
+        unet+count                          5.357   7.793 -1.569  0.504         0.967    0.277    0.705          0.225     0.552     0.176          0.000     1.000     0.000
+        unet (seed 1)                       5.177   7.381 -2.628  0.550         0.979    0.293    0.696          0.070     0.175     0.069          0.000       NaN     0.000
+        unet+qm (seed 1)                    5.988   8.934  0.168  0.522         0.826    0.215    0.674          0.286     0.671     0.181          0.100     0.997     0.003
+        unet (seed 2)                       5.305   7.523 -2.806  0.531         0.987    0.290    0.704          0.035     0.154     0.035          0.000       NaN     0.000
+        unet+qm (seed 2)                    5.941   8.457 -0.111  0.518         0.804    0.226    0.652          0.268     0.685     0.169          0.200     0.988     0.011
+saved figures\scores_test.csv
+
+Mean over seeds (and range = max - min):
+                                     mae   bias   corr  csi_20mm  csi_50mm  mae_range  bias_range  corr_range  csi_20mm_range  csi_50mm_range  runs
+region  base                                                                                                                                       
+all     bilinear                   8.244 -0.472  0.418     0.209     0.107      0.000       0.000       0.000           0.000           0.000     1
+        quantile_mapping           9.023  0.232  0.432     0.245     0.150      0.000       0.000       0.000           0.000           0.000     1
+        unet                       7.502 -4.631  0.463     0.042     0.001      0.174       0.157       0.036           0.019           0.003     3
+        unet+clip                  7.667 -4.497  0.386     0.038     0.007      0.000       0.000       0.000           0.000           0.000     1
+        unet+clip-image            7.493 -4.563  0.439     0.057     0.008      0.000       0.000       0.000           0.000           0.000     1
+        unet+clip-input            7.451 -4.710  0.470     0.049     0.009      0.121       1.116       0.044           0.075           0.027     3
+        unet+clip-input+qm         8.224 -0.209  0.480     0.271     0.159      0.315       0.374       0.017           0.007           0.004     3
+        unet+clip-input-random     7.340 -4.395  0.480     0.070     0.003      0.098       0.467       0.035           0.019           0.007     3
+        unet+clip-input-random+qm  8.252 -0.279  0.485     0.273     0.159      0.090       0.251       0.026           0.008           0.021     3
+        unet+count                 7.764 -2.957  0.390     0.158     0.077      0.000       0.000       0.000           0.000           0.000     1
+        unet+qm                    8.454 -0.016  0.467     0.263     0.157      0.319       0.198       0.044           0.018           0.028     3
+bangkok bilinear                   5.395 -1.510  0.530     0.178     0.000      0.000       0.000       0.000           0.000           0.000     1
+        quantile_mapping           6.052 -0.172  0.524     0.171     0.006      0.000       0.000       0.000           0.000           0.000     1
+        unet                       5.205 -2.756  0.553     0.040     0.000      0.172       0.206       0.047           0.054           0.000     3
+        unet+clip                  5.244 -2.501  0.541     0.044     0.000      0.000       0.000       0.000           0.000           0.000     1
+        unet+clip-image            5.308 -3.288  0.542     0.068     0.000      0.000       0.000       0.000           0.000           0.000     1
+        unet+clip-input            5.373 -3.124  0.532     0.050     0.000      0.244       0.667       0.043           0.150           0.000     3
+        unet+clip-input+qm         5.875 -0.230  0.509     0.180     0.005      0.319       0.332       0.061           0.018           0.009     3
+        unet+clip-input-random     5.295 -3.156  0.546     0.005     0.000      0.255       0.925       0.026           0.012           0.000     3
+        unet+clip-input-random+qm  5.588 -0.624  0.519     0.160     0.017      0.143       0.548       0.031           0.026           0.038     3
+        unet+count                 5.357 -1.569  0.504     0.176     0.000      0.000       0.000       0.000           0.000           0.000     1
+        unet+qm                    5.879 -0.003  0.527     0.177     0.008      0.280       0.280       0.024           0.011           0.008     3
+saved figures\scores_test_seeds.csv
+saved figures\maps_test.png
+saved figures\exceedance_test.png
